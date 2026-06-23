@@ -1,0 +1,12 @@
+/vendor/
+.env
+.env.backup
+.htaccess
+*.log
+*.cache
+.DS_Store
+composer.lock
+webhook.log
+logs/*.log
+!logs/.gitkeep
+
