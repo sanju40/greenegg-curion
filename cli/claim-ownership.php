@@ -9,15 +9,16 @@
  * 3. Prints response/errors clearly
  *
  * Usage:
- *   php bundle_ownership_debug.php
+ *   php cli/claim-ownership.php
  */
 
-define('SHOPIFY_STORE_DOMAIN', 'your-store.myshopify.com');
-define('SHOPIFY_ACCESS_TOKEN', 'your-shopify-access-token');
+require __DIR__ . '/../src/bootstrap.php';
 
-$shop = SHOPIFY_STORE_DOMAIN;
-$accessToken = SHOPIFY_ACCESS_TOKEN;
-$apiVersion = '2026-01';
+$config = \App\Core\Config::get();
+
+$shop        = $config['shopify']['shop_domain'];
+$accessToken = $config['shopify']['access_token'];
+$apiVersion  = $config['shopify']['api_version'];
 
 // Existing product GID you want to test
 $productGid = 'gid://shopify/Product/10354024907068';
