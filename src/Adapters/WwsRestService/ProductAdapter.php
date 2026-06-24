@@ -50,7 +50,7 @@ class ProductAdapter implements AdapterInterface
         $product->cost = null; // WWS doesn't provide cost
         
         // Inventory
-        $product->inventoryQty = $this->getNestedValue($wwsData, 'stock.quantityStock') ?? 0;
+        $product->inventoryQty = $this->getNestedValue($wwsData, 'stock.quantityAvailable1') ?? 0;
         $product->inventoryPolicy = 'deny';
         $product->inventoryManagement = 'shopify';
         
