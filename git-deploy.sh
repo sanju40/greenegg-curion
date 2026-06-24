@@ -30,11 +30,8 @@ log "Deploy triggered"
 log "Running as: $(whoami)"
 log "Directory : $DIR"
 
-# ── SSH key (configure if the server uses a dedicated deploy key) ─────────────
-# Uncomment and set the correct path to the private key that has read access
-# to the GitHub repository (added as a Deploy Key in GitHub repo settings).
-#
-# export GIT_SSH_COMMAND='ssh -i /home/admin/.ssh/greenegg-curion-deploy -o IdentitiesOnly=yes'
+# ── SSH deploy key ────────────────────────────────────────────────────────────
+export GIT_SSH_COMMAND='ssh -i /home/admin/.ssh/greenegg-curion-deploy -o IdentitiesOnly=yes'
 
 # Prevents git from being confused by environment variables set by the web server
 unset GIT_DIR
@@ -64,15 +61,26 @@ fi
 log "git pull succeeded"
 
 # ── PHP dependencies ──────────────────────────────────────────────────────────
-# Runs composer install to pick up any new packages added to composer.json.
-# Uses the existing composer.lock on the server if present (safe, no version drift).
-# Remove or comment out this block if you manage vendor/ manually.
+# Find composer — checks PATH first, then common server locations
+COMPOSER_BIN=""
 if command -v composer &> /dev/null; then
-  log "composer install --no-dev --optimize-autoloader"
-  composer install --no-dev --optimize-autoloader --no-interaction >> "$LOG_FILE" 2>&1
+  COMPOSER_BIN="composer"
+else
+  for candidate in /usr/local/bin/composer /usr/bin/composer /opt/cpanel/composer/bin/composer \
+                   /home/admin/bin/composer /home/admin/composer.phar; do
+    if [ -x "$candidate" ]; then
+      COMPOSER_BIN="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -n "$COMPOSER_BIN" ]; then
+  log "composer install --no-dev --optimize-autoloader (using $COMPOSER_BIN)"
+  $COMPOSER_BIN install --no-dev --optimize-autoloader --no-interaction >> "$LOG_FILE" 2>&1
   log "composer done (exit: $?)"
 else
-  log "composer not in PATH — skipping"
+  log "composer not found — skipping (vendor/ remains as-is)"
 fi
 
 # ── Permissions ───────────────────────────────────────────────────────────────
