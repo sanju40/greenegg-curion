@@ -107,6 +107,10 @@ BUNDLE_STOCK_MANAGEMENT_IDS=101,102
 UPPROMOTE_ENABLED=true
 UPPROMOTE_API_KEY=your_uppromote_api_key
 UPPROMOTE_WEBHOOK_SECRET=your_uppromote_webhook_secret
+
+# ── Auto-deploy (GitHub webhook) ──────────────────────────────
+GIT_WEBHOOK_SECRET=your_generated_secret   # see DEPLOY.md
+GIT_DEBUG=false                            # set true to log every deploy step
 ```
 
 ### Config Files (`config/`)
@@ -267,6 +271,21 @@ All endpoints require `WEB_ENABLED=true` in `.env`. The entry point is `public/i
 
 ---
 
+## Auto-Deploy (GitHub → Server)
+
+Every push to `main` automatically deploys to the production server via:
+
+| File | Purpose |
+|---|---|
+| `public/git-webhook.php` | Receives GitHub push webhook, validates HMAC signature, triggers deploy |
+| `git-deploy.sh` | Runs `git pull`, `composer install`, and fixes permissions |
+
+**Webhook URL:** `https://curion.techsystintel.com/git-webhook.php`
+
+For full setup instructions (first-time server configuration, SSH deploy keys, GitHub webhook registration) see **[DEPLOY.md](DEPLOY.md)**.
+
+---
+
 ## Webhook Setup
 
 ### Shopify
@@ -328,8 +347,12 @@ public_html/
 │   └── scheduler.php
 ├── database/                   # Migrations and migration docs
 │   └── migrations/
-├── logs/                       # Flat-file logs (gitignored except .gitkeep)
-├── public/                     # Web entry point (index.php)
+├── git-deploy.sh               # Auto-deploy script (triggered by git-webhook.php)
+├── git-logs/                   # Deploy logs — created automatically, gitignored
+├── logs/                       # App flat-file logs (gitignored except .gitkeep)
+├── public/                     # Document root (served by nginx)
+│   ├── index.php               # App entry point — routes all /api/* requests
+│   └── git-webhook.php         # GitHub auto-deploy webhook (served directly by nginx)
 ├── src/
 │   ├── Adapters/               # Maps between core Product model and provider formats
 │   │   ├── Shopify/
@@ -373,6 +396,7 @@ public_html/
 
 - Shopify webhook payloads validated via HMAC-SHA256 (`SHOPIFY_WEBHOOK_SECRET`)
 - UpPromote webhook payloads validated via HMAC-SHA256 (`UPPROMOTE_WEBHOOK_SECRET`)
+- GitHub auto-deploy webhook validated via HMAC-SHA256 (`GIT_WEBHOOK_SECRET`)
 - All credentials stored in `.env` — never committed to the repository
 - Prepared statements used for all database queries
 
@@ -388,6 +412,8 @@ public_html/
 | Product not syncing | Run `php cli/sync-product.php --sku=ABC123` and check output |
 | Wrong stock levels | Confirm WWS `productSearch` response includes `stock.quantityAvailable1` |
 | Webhook not firing | Check `SHOPIFY_WEBHOOK_SECRET` matches the secret configured in Shopify admin |
+| Auto-deploy not triggering | Check `git-logs/deploy.log` on the server; see `DEPLOY.md` for troubleshooting |
+| Auto-deploy returns 403 | `GIT_WEBHOOK_SECRET` in `.env` does not match the secret set in GitHub |
 
 ---
 
