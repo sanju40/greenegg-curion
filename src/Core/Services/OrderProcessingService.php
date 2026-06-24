@@ -120,11 +120,15 @@ class OrderProcessingService
                         'address_id'       => 9983,
                     ]);
                 } else {
+                    // Resolve order-level email as fallback (covers guest checkouts where
+                    // customer.email can be null even though order.contact_email is populated)
+                    $orderEmail = ($orderData['contact_email'] ?? '') ?: ($orderData['email'] ?? '') ?: null;
                     $customer = $this->getOrCreateCustomer(
                         $orderData['customer'] ?? null,
                         $orderData['billing_address'] ?? null,
                         $erpProvider,
-                        $orderData['shipping_address'] ?? null
+                        $orderData['shipping_address'] ?? null,
+                        $orderEmail
                     );
                 }
                 
@@ -378,7 +382,7 @@ class OrderProcessingService
      * @param ErpProviderInterface $erpProvider
      * @return array Customer data
      */
-    private function getOrCreateCustomer(?array $customerData, ?array $billingAddress, ErpProviderInterface $erpProvider, ?array $shippingAddress = null): array
+    private function getOrCreateCustomer(?array $customerData, ?array $billingAddress, ErpProviderInterface $erpProvider, ?array $shippingAddress = null, ?string $orderEmail = null): array
     {
         // If no customer data, use billing address
         if (!$customerData && $billingAddress) {
@@ -394,32 +398,90 @@ class OrderProcessingService
             throw new SyncException("No customer or billing address data", 'order', null);
         }
 
-        // Search for existing customer by email
-        $email = $customerData['email'] ?? $billingAddress['email'] ?? null;
+        // Resolve email with fallback chain:
+        // 1. customer.email (Shopify customer object)
+        // 2. billing_address.email (rarely populated in Shopify)
+        // 3. order-level email/contact_email (passed in from processOrder)
+        $email = ($customerData['email'] ?? '') ?: ($billingAddress['email'] ?? '') ?: $orderEmail ?: null;
+
+        LogHelper::info('Customer search: resolved email', [
+            'customer_email'  => $customerData['email'] ?? null,
+            'billing_email'   => $billingAddress['email'] ?? null,
+            'order_email'     => $orderEmail,
+            'resolved_email'  => $email,
+        ]);
+
         $existingCustomer = null;
         
         if ($email && $erpProvider->checkCapability('customer_search')) {
+            $dbId     = $this->config['wws']['orders_database_id'] ?: $this->config['wws']['database_id'] ?? '1';
+            $endpoint = "customerSearch/{$dbId}/{$email}/0/1";
+
+            LogHelper::info('Customer search: calling WWS API', [
+                'endpoint' => $endpoint,
+                'email'    => $email,
+            ]);
+
             try {
                 $results = $erpProvider instanceof WwsErpProvider
                     ? $erpProvider->searchCustomersForOrder($email, 0, 1)
                     : $erpProvider->searchCustomers($email, 0, 1);
+
+                LogHelper::info('Customer search: WWS API response', [
+                    'endpoint'      => $endpoint,
+                    'result_count'  => is_array($results) ? count($results) : 0,
+                    'raw_result'    => is_array($results) ? array_map(fn($r) => [
+                        'id'          => $r['id'] ?? null,
+                        'email_top'   => $r['email'] ?? null,
+                        'email_addr'  => $r['address']['email'] ?? null,
+                    ], $results) : $results,
+                ]);
+
                 if (!empty($results) && is_array($results)) {
                     foreach ($results as $result) {
                         // WWS API nests the email inside address.email; also check top-level as fallback
                         $resultEmail = $result['email'] ?? $result['address']['email'] ?? null;
-                        if ($resultEmail && strtolower($resultEmail) === strtolower($email)) {
+                        $matched = $resultEmail && strtolower($resultEmail) === strtolower($email);
+
+                        LogHelper::info('Customer search: match check', [
+                            'result_id'    => $result['id'] ?? null,
+                            'result_email' => $resultEmail,
+                            'search_email' => $email,
+                            'matched'      => $matched,
+                        ]);
+
+                        if ($matched) {
                             $existingCustomer = $result;
+                            LogHelper::info('Customer search: existing customer found — will REUSE', [
+                                'customer_id' => $existingCustomer['id'] ?? null,
+                                'email'       => $email,
+                            ]);
                             break;
                         }
                     }
+
+                    if (!$existingCustomer) {
+                        LogHelper::info('Customer search: no match found — will CREATE new customer', [
+                            'email' => $email,
+                        ]);
+                    }
+                } else {
+                    LogHelper::info('Customer search: empty response — will CREATE new customer', [
+                        'email' => $email,
+                    ]);
                 }
             } catch (\Exception $e) {
-                // Continue to create new customer
                 LogHelper::warning('Customer search failed during order processing', [
                     'email' => $email,
                     'error' => $e->getMessage(),
                 ]);
             }
+        } else {
+            LogHelper::warning('Customer search: SKIPPED', [
+                'reason'          => !$email ? 'no email resolved' : 'provider lacks customer_search capability',
+                'email'           => $email,
+                'has_capability'  => $erpProvider->checkCapability('customer_search'),
+            ]);
         }
 
         // If customer exists, check and handle address reuse
