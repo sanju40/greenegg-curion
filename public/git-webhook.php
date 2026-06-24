@@ -3,30 +3,23 @@
 /**
  * GitHub Auto-Deploy Webhook
  *
- * Receives a push event from GitHub, validates the HMAC-SHA256 signature,
- * and triggers git-deploy.sh in the background.
+ * Lives in public/ (document root) so nginx serves it directly
+ * without routing through index.php.
  *
- * Setup:
- *   1. Add GIT_WEBHOOK_SECRET=<random_secret> to your .env file
- *   2. In GitHub → repo → Settings → Webhooks → Add webhook:
- *        Payload URL : https://curion.techsystintel.com/git-webhook.php
- *        Content type: application/json
- *        Secret      : <same random secret>
- *        Events      : Just the push event
- *   3. chmod +x git-deploy.sh  (run once on the server)
+ * Webhook URL: https://curion.techsystintel.com/git-webhook.php
  */
 
-$rootPath   = __DIR__;
-$logDir     = $rootPath . '/git-logs';
-$logFile    = $logDir   . '/git-webhook.log';
+// One level up from public/ is the project root (where .env and git-deploy.sh live)
+$rootPath     = dirname(__DIR__);
+$logDir       = $rootPath . '/git-logs';
+$logFile      = $logDir   . '/git-webhook.log';
 $deployScript = $rootPath . '/git-deploy.sh';
 
-// Ensure log directory exists
 if (!is_dir($logDir)) {
     mkdir($logDir, 0755, true);
 }
 
-// ── Minimal .env reader (avoids loading the full app bootstrap) ───────────────
+// ── Minimal .env reader ───────────────────────────────────────────────────────
 function readEnvValue(string $key, string $envFile): ?string
 {
     if (!file_exists($envFile)) {
@@ -44,19 +37,20 @@ function readEnvValue(string $key, string $envFile): ?string
     return null;
 }
 
-$secret      = readEnvValue('GIT_WEBHOOK_SECRET', $rootPath . '/.env');
-$debugMode   = readEnvValue('GIT_DEBUG', $rootPath . '/.env') === 'true';
+$secret    = readEnvValue('GIT_WEBHOOK_SECRET', $rootPath . '/.env');
+$debugMode = readEnvValue('GIT_DEBUG', $rootPath . '/.env') === 'true';
 
-function webhookLog(string $message, string $logFile, bool $enabled = true): void
+function webhookLog(string $message, string $logFile, bool $always = false): void
 {
-    if ($enabled) {
+    global $debugMode;
+    if ($always || $debugMode) {
         file_put_contents($logFile, date('Y-m-d H:i:s') . ' - ' . $message . "\n", FILE_APPEND);
     }
 }
 
-// ── Validate secret is configured ────────────────────────────────────────────
+// ── Secret must be configured ─────────────────────────────────────────────────
 if (empty($secret)) {
-    webhookLog('ERROR: GIT_WEBHOOK_SECRET not set in .env', $logFile);
+    webhookLog('ERROR: GIT_WEBHOOK_SECRET not set in .env', $logFile, true);
     http_response_code(500);
     exit('Server config error');
 }
@@ -71,14 +65,12 @@ $receivedSignature = $headers['X-Hub-Signature-256']
 
 $expectedSignature = 'sha256=' . hash_hmac('sha256', $payload, $secret);
 
-if ($debugMode) {
-    webhookLog('Webhook received', $logFile);
-    webhookLog('Signature check — expected: ' . $expectedSignature . ', received: ' . $receivedSignature, $logFile);
-}
+webhookLog('Webhook received', $logFile);
+webhookLog('Signature — expected: ' . $expectedSignature . ', received: ' . $receivedSignature, $logFile);
 
 // ── Validate HMAC signature ───────────────────────────────────────────────────
 if (!hash_equals($expectedSignature, $receivedSignature)) {
-    webhookLog('ERROR: Invalid signature — aborting', $logFile);
+    webhookLog('ERROR: Invalid signature — aborting', $logFile, true);
     http_response_code(403);
     exit('Forbidden');
 }
@@ -88,26 +80,26 @@ $data = json_decode($payload, true);
 $ref  = $data['ref'] ?? '';
 
 if ($ref !== 'refs/heads/main') {
-    webhookLog('Skipping — ref is "' . $ref . '", not refs/heads/main', $logFile);
+    webhookLog('Skipping — ref is "' . $ref . '", not refs/heads/main', $logFile, true);
     http_response_code(200);
     exit('Skipped — not main branch');
 }
 
 // ── Trigger deploy script in background ──────────────────────────────────────
 if (!file_exists($deployScript)) {
-    webhookLog('ERROR: git-deploy.sh not found at ' . $deployScript, $logFile);
+    webhookLog('ERROR: git-deploy.sh not found at ' . $deployScript, $logFile, true);
     http_response_code(500);
     exit('Deploy script missing');
 }
 
-$debugFlag  = $debugMode ? ' --debug' : '';
-$deployCmd  = '/bin/bash ' . escapeshellarg($deployScript) . $debugFlag;
+$debugFlag = $debugMode ? ' --debug' : '';
+$deployCmd = '/bin/bash ' . escapeshellarg($deployScript) . $debugFlag;
 
-webhookLog('Triggering: ' . $deployCmd, $logFile, $debugMode);
+webhookLog('Triggering: ' . $deployCmd, $logFile);
 
 shell_exec($deployCmd . ' > /dev/null 2>&1 &');
 
-webhookLog('Deploy triggered successfully', $logFile, $debugMode);
+webhookLog('Deploy triggered successfully', $logFile, true);
 
 http_response_code(200);
 echo 'OK';
