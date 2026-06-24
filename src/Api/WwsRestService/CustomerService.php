@@ -37,7 +37,17 @@ class CustomerService
             $endpoint .= "/{$offset}/{$limit}";
         }
         
-        return $this->client->get($endpoint);
+        $result = $this->client->get($endpoint);
+
+        // The WWS DataSnap API wraps search results in an extra array level:
+        //   {"result": [[customer1, customer2, ...]]}
+        // Client::get() unwraps the outer "result" key, leaving [[customer1, ...]].
+        // Unwrap one more level so callers always receive [customer1, customer2, ...].
+        if (isset($result[0]) && is_array($result[0])) {
+            return $result[0];
+        }
+
+        return $result;
     }
 
     /**
